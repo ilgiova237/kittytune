@@ -74,7 +74,10 @@ class ArtworkOptimizationTest {
             listOf("https://lh3.ggpht.com/cover=s1080-c"),
             youtubeArtworkUpgrades("https://lh3.ggpht.com/cover=s120-c", 640)
         )
-        assertEquals(emptyList<String>(), youtubeArtworkUpgrades(url, 144))
+        assertEquals(
+            listOf("https://lh3.googleusercontent.com/cover=w144-h108-l90-rj?example=1"),
+            youtubeArtworkUpgrades(url, 144)
+        )
         assertEquals(
             emptyList<String>(),
             youtubeArtworkUpgrades("https://lh3.googleusercontent.com/cover=w1600-h1600", 640)
@@ -95,7 +98,7 @@ class ArtworkOptimizationTest {
         assertEquals(emptyList<String>(), youtubeArtworkUpgrades(prefix + "maxresdefault.jpg", 640))
         assertEquals(emptyList<String>(), youtubeArtworkUpgrades(prefix + "hqdefault.jpg", 144))
         assertEquals(
-            emptyList<String>(),
+            listOf("https://yt3.googleusercontent.com/avatar=s1080"),
             youtubeArtworkUpgrades("https://yt3.googleusercontent.com/avatar=s120", 640)
         )
         assertEquals(
