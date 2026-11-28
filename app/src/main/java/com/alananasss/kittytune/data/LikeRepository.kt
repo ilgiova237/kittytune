@@ -25,6 +25,7 @@ import java.io.BufferedReader
 import java.lang.reflect.Type
 
 object LikeRepository {
+    private val initialization = com.alananasss.kittytune.core.ProcessInitializer()
     private const val PREF_NAME = "soundtune_likes_v3"
     private const val KEY_LIKED_TRACKS = "liked_tracks_full"
     private const val KEY_LIKED_PLAYLISTS = "liked_playlists_ids"
@@ -81,9 +82,9 @@ object LikeRepository {
     private lateinit var playerPrefs: com.alananasss.kittytune.data.local.PlayerPreferences
 
     /** Whether [init] ran in this process (likes loaded from storage). */
-    val isReady: Boolean get() = ::prefs.isInitialized
+    val isReady: Boolean get() = initialization.isInitialized
 
-    fun init(context: Context) {
+    fun init(context: Context) = initialization.initialize {
         appContext = context.applicationContext
         prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         api = RetrofitClient.create(context)
@@ -94,6 +95,11 @@ object LikeRepository {
             com.alananasss.kittytune.data.sync.SyncLikes.seedMissing()
             com.alananasss.kittytune.data.sync.SyncLikes.seedMissingPlaylists()
         }
+    }
+
+    /** Prewarm without exposing partially loaded likes to callers of init. */
+    fun preload(context: Context) {
+        scope.launch { init(context.applicationContext) }
     }
 
     private suspend fun getUserId(): Long? {
@@ -611,6 +617,7 @@ object LikeRepository {
 
     private fun loadFromStorage() {
         var loadedList: List<Track>? = null
+        var loadedLegacyPreferences = false
         val file = File(appContext.filesDir, LIKED_TRACKS_FILE)
         if (file.exists()) {
             try {
@@ -629,6 +636,7 @@ object LikeRepository {
             if (json != null) {
                 try {
                     loadedList = gson.fromJson<Array<Track>>(json, Array<Track>::class.java)?.filterNotNull()
+                    loadedLegacyPreferences = loadedList != null
                     prefs.edit().remove(KEY_LIKED_TRACKS).apply()
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -637,18 +645,10 @@ object LikeRepository {
         }
 
         if (loadedList != null) {
-            val now = System.currentTimeMillis()
-            val migratedList = loadedList.mapIndexed { index, track ->
-                if (track.likedAt == null || track.likedAt == 0L) {
-                    track.copy(likedAt = now - (index * 1000))
-                } else {
-                    track
-                }
-            }
-            val blacklist = getBlacklist()
-            _likedTracks.value = migratedList.filter { !blacklist.contains(it.id) }
-            _likedTrackIds.value = _likedTracks.value.mapTo(HashSet(_likedTracks.value.size)) { it.id }
-            saveLikedTracks()
+            val restored = prepareStoredLikes(loadedList, getBlacklist(), System.currentTimeMillis())
+            _likedTracks.value = restored.tracks
+            _likedTrackIds.value = restored.tracks.mapTo(HashSet(restored.tracks.size)) { it.id }
+            if (restored.changed || loadedLegacyPreferences) saveLikedTracks()
         }
 
         val savedPlaylistIds =

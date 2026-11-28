@@ -1754,7 +1754,7 @@ fun NewPlayerScreen(
                     }
                     if (automixDebugOverlayEnabled) {
                         com.alananasss.kittytune.ui.player.automix.AutomixDebugOverlay(
-                            currentPositionMs = viewModel.uiCurrentPosition
+                            currentPosition = { viewModel.uiCurrentPosition }
                         )
                     }
 
@@ -12666,7 +12666,7 @@ fun OldPlayerScreen(
                 }
                 if (automixDebugOverlayEnabled) {
                     com.alananasss.kittytune.ui.player.automix.AutomixDebugOverlay(
-                        currentPositionMs = viewModel.uiCurrentPosition
+                        currentPosition = { viewModel.uiCurrentPosition }
                     )
                 }
 

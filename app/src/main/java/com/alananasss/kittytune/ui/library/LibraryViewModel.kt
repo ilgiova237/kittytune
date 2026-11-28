@@ -3,6 +3,8 @@ package com.alananasss.kittytune.ui.library
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -118,9 +120,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private var allFoldersCache = listOf<LibraryFolder>()
     private val _allItemMetas = MutableStateFlow<Map<String, LibraryItemMeta>>(emptyMap())
     val allItemMetas = _allItemMetas.asStateFlow()
+    private var itemMetasState by mutableStateOf<Map<String, LibraryItemMeta>>(emptyMap())
+    private var displayLikedPlaylistIds by mutableStateOf(LikeRepository.likedPlaylists.value)
     private var allItemMetasCache: Map<String, LibraryItemMeta>
-        get() = _allItemMetas.value
+        get() = itemMetasState
         set(value) {
+            itemMetasState = value
             _allItemMetas.value = value
         }
 
@@ -240,6 +245,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
+            return soundCloudDisplayedItems
+        }
+
+    private val soundCloudDisplayedItems: List<LibraryItem> by derivedStateOf {
             val items = _allItems.filter { item ->
                 when (item) {
                     is LibraryItem.FolderItem -> {
@@ -276,7 +285,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                             when (ownershipFilter) {
                                 OwnershipFilter.ALL -> true
                                 OwnershipFilter.CREATED -> item.playlist.user?.id == userProfile?.id || item.playlist.user?.id == 0L || item.playlist.id < 0L
-                                OwnershipFilter.LIKED -> LikeRepository.isPlaylistLiked(item.playlist.id)
+                                OwnershipFilter.LIKED -> item.playlist.id in displayLikedPlaylistIds
                             }
                         } else if (matchesType && isStation) {
                             val isArtistStation =
@@ -353,14 +362,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
-            return if (currentFolderId == null) {
+            if (currentFolderId == null) {
                 val pinned = sorted.filter { it.isPinned }
                 val unpinned = sorted.filter { !it.isPinned }
                 pinned + unpinned
             } else {
                 sorted
             }
-        }
+    }
 
     var isLoading by mutableStateOf(true)
     var isOfflineMode by mutableStateOf(false)
@@ -461,9 +470,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
 
         viewModelScope.launch {
+            LikeRepository.likedPlaylists.collect { displayLikedPlaylistIds = it }
+        }
+
+        viewModelScope.launch {
             LikeRepository.likedTracks.collect { tracksFromRepo ->
-                likedTracks.clear()
-                likedTracks.addAll(tracksFromRepo)
+                Snapshot.withMutableSnapshot { reconcileLibraryList(likedTracks, tracksFromRepo) }
             }
         }
 
@@ -649,13 +661,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             } else true
         }
 
+        val playlistCounts = countLibraryChildren(
+            (filteredOnlineItems.asSequence() + filteredLocalItems.asSequence())
+                .filterIsInstance<LibraryItem.PlaylistItem>()
+                .map { allItemMetasCache[it.key]?.folderId }
+        )
+        val folderCounts = countLibraryChildren(allFoldersCache.asSequence().map { it.parentFolderId })
         val folderItems = allFoldersCache.map { folder ->
-            val childPlaylistsCount = (filteredOnlineItems + filteredLocalItems).count { item ->
-                if (item is LibraryItem.PlaylistItem) {
-                    allItemMetasCache[item.key]?.folderId == folder.id
-                } else false
-            }
-            val childFoldersCount = allFoldersCache.count { it.parentFolderId == folder.id }
+            val childPlaylistsCount = playlistCounts[folder.id] ?: 0
+            val childFoldersCount = folderCounts[folder.id] ?: 0
             val isPinned = if (folder.parentFolderId == null) folder.isPinned else false
             LibraryItem.FolderItem(
                 folder = folder,
@@ -667,11 +681,12 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             )
         }
 
-        _allItems.clear()
-        _allItems.addAll(folderItems)
-        _allItems.addAll(filteredOnlineItems)
-        _allItems.addAll(filteredLocalItems)
-        _allItems.addAll(savedArtistsCache)
+        val next = ArrayList<LibraryItem>(folderItems.size + filteredOnlineItems.size + filteredLocalItems.size + savedArtistsCache.size)
+        next.addAll(folderItems)
+        next.addAll(filteredOnlineItems)
+        next.addAll(filteredLocalItems)
+        next.addAll(savedArtistsCache)
+        Snapshot.withMutableSnapshot { reconcileLibraryList(_allItems, next) }
     }
 
     fun createFolder(

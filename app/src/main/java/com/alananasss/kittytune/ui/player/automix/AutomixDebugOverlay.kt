@@ -19,6 +19,15 @@ import androidx.compose.ui.unit.sp
 import com.alananasss.kittytune.audio.automix.AutomixManager
 import com.alananasss.kittytune.utils.makeTimeString
 
+/** Observe position inside this restart scope, not the surrounding player layout. */
+@Composable
+fun AutomixDebugOverlay(
+    currentPosition: () -> Long,
+    modifier: Modifier = Modifier,
+) {
+    AutomixDebugOverlay(currentPositionMs = currentPosition(), modifier = modifier)
+}
+
 @Composable
 fun AutomixDebugOverlay(
     currentPositionMs: Long,

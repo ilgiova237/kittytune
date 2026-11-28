@@ -13,6 +13,7 @@ import com.alananasss.kittytune.domain.*
 import com.mpatric.mp3agic.ID3v24Tag
 import com.mpatric.mp3agic.Mp3File
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.debounce
@@ -33,6 +34,7 @@ import android.util.Base64
 import com.alananasss.kittytune.data.upload.ArtworkUploadRequest
 
 object DownloadManager {
+    private val initialization = com.alananasss.kittytune.core.ProcessInitializer()
     const val LIKES_BATCH_ID = -1L
 
     private const val CONCURRENT_DOWNLOAD_LIMIT = 2
@@ -45,6 +47,7 @@ object DownloadManager {
 
     private val api: SoundCloudApi by lazy { RetrofitClient.create(context) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val maintenance = com.alananasss.kittytune.core.CoalescingTask(scope)
     private val baseClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -141,15 +144,23 @@ object DownloadManager {
     private val batchTrackIds = ConcurrentHashMap<Long, Set<Long>>()
 
     fun init(ctx: Context) {
-        context = ctx.applicationContext
-        database = AppDatabase.getDatabase(context)
-        prefs = PlayerPreferences(context)
+        initialization.initialize {
+            context = ctx.applicationContext
+            database = AppDatabase.getDatabase(context)
+            prefs = PlayerPreferences(context)
 
-        downloadedIds = database.downloadDao().getAllTracks()
-            .map { list -> list.map { it.id }.toSet() }
-            .stateIn(scope = scope, started = SharingStarted.Eagerly, initialValue = emptySet())
+            downloadedIds = database.downloadDao().getDownloadedTrackIds()
+                .map { ids -> ids.toSet() }
+                .distinctUntilChanged()
+                .stateIn(scope = scope, started = SharingStarted.Eagerly, initialValue = emptySet())
+        }
+        refreshStoredLibrary()
+    }
 
-        scope.launch {
+    private fun refreshStoredLibrary() {
+        // Keep the original per-entry integrity/metadata checks, coalescing overlapping
+        // Activity/service requests instead of accumulating concurrent repair passes.
+        maintenance.launch {
             try {
                 val dao = database.downloadDao()
                 dao.fixNegativeIdPlaylistsUserCreated()

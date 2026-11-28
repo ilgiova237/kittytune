@@ -44,6 +44,10 @@
         @Query("SELECT * FROM downloaded_tracks WHERE localAudioPath != '' ORDER BY downloadedAt DESC")
         fun getAllTracks(): Flow<List<LocalTrack>>
 
+        // ID membership only: same predicate as getAllTracks, with no full-row hydration/sort.
+        @Query("SELECT id FROM downloaded_tracks WHERE localAudioPath != ''")
+        fun getDownloadedTrackIds(): Flow<List<Long>>
+
         @Query("SELECT * FROM downloaded_tracks WHERE localAudioPath != '' ORDER BY downloadedAt DESC")
         suspend fun getAllTracksList(): List<LocalTrack>
 

@@ -46,6 +46,11 @@ import com.zionhuang.innertube.models.YouTubeLocale
     class MainActivity : ComponentActivity() {
 
         private var rawBaseContext: Context? = null
+        private var startupComplete = false
+        private var startupDrawGate: android.view.ViewTreeObserver.OnPreDrawListener? = null
+        private var startupIntent: Intent? = null
+        private var startupReadTogether = true
+        private val pendingStartupIntents = java.util.ArrayDeque<Intent>()
 
         fun getPrintManager(): android.print.PrintManager? =
             rawBaseContext?.getSystemService(android.print.PrintManager::class.java)
@@ -91,6 +96,8 @@ import com.zionhuang.innertube.models.YouTubeLocale
 
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
+            // Only prewarm for an Activity launch, not widget/background-only processes.
+            LikeRepository.preload(applicationContext)
 
             enableEdgeToEdge(
                 statusBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
@@ -105,10 +112,38 @@ import com.zionhuang.innertube.models.YouTubeLocale
                 window.isNavigationBarContrastEnforced = false
             }
 
-            // Initialize Data Layer Singletons
             Config.init(applicationContext)
             com.alananasss.kittytune.audio.haptics.HapticUtil.initialize(applicationContext)
-            LikeRepository.init(applicationContext)
+            _pendingTogetherCode.value = savedInstanceState?.getString("pending_together_code")
+            @Suppress("DEPRECATION")
+            val restoredInitialIntent = savedInstanceState?.getParcelable<Intent>("startup_initial_intent")
+            startupIntent = restoredInitialIntent ?: intent
+            startupReadTogether = savedInstanceState?.getBoolean("startup_read_together", false) ?: true
+            @Suppress("DEPRECATION")
+            val restoredIntents = savedInstanceState?.getParcelableArrayList<Intent>("startup_pending_intents")
+            restoredIntents?.let { pendingStartupIntents.addAll(it) }
+            // Keep the existing launch window until the original screen is ready; IO
+            // remains asynchronous without introducing an empty-library/blank first frame.
+            val content = findViewById<android.view.View>(android.R.id.content)
+            startupDrawGate = object : android.view.ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    if (!startupComplete) return false
+                    content.viewTreeObserver.removeOnPreDrawListener(this)
+                    startupDrawGate = null
+                    return true
+                }
+            }.also { content.viewTreeObserver.addOnPreDrawListener(it) }
+            lifecycleScope.launch {
+                // Keep parsing and any wait for prewarming off Main. Nothing writable is
+                // displayed before likes are ready, so a late load cannot erase user actions.
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    LikeRepository.init(applicationContext)
+                }
+                completeStartup(savedInstanceState)
+            }
+        }
+
+        private fun completeStartup(savedInstanceState: Bundle?) {
             com.alananasss.kittytune.data.SocialProofRepository.init(applicationContext)
             com.alananasss.kittytune.data.VibesRepository.init(applicationContext)
             DownloadManager.init(applicationContext)
@@ -133,7 +168,10 @@ import com.zionhuang.innertube.models.YouTubeLocale
             refreshThemeState()
 
             _pendingTogetherCode.value = savedInstanceState?.getString("pending_together_code")
-            handleIntent(intent, readTogetherInvite = savedInstanceState == null)
+            startupComplete = true
+            handleIntent(startupIntent, readTogetherInvite = startupReadTogether)
+            while (pendingStartupIntents.isNotEmpty()) handleIntent(pendingStartupIntents.removeFirst())
+            startupIntent = null
 
             val activeLocale = LocaleUtils.getLocale(this)
             YouTube.locale = YouTubeLocale(
@@ -239,12 +277,17 @@ import com.zionhuang.innertube.models.YouTubeLocale
         public override fun onNewIntent(intent: Intent) {
             super.onNewIntent(intent)
             setIntent(intent)
-            handleIntent(intent)
+            if (startupComplete) handleIntent(intent) else pendingStartupIntents.addLast(intent)
         }
 
         override fun onSaveInstanceState(outState: Bundle) {
             super.onSaveInstanceState(outState)
             outState.putString("pending_together_code", _pendingTogetherCode.value)
+            if (!startupComplete) {
+                outState.putParcelable("startup_initial_intent", startupIntent)
+                outState.putBoolean("startup_read_together", startupReadTogether)
+                outState.putParcelableArrayList("startup_pending_intents", ArrayList(pendingStartupIntents))
+            }
         }
 
         private fun handleIntent(intent: Intent?, readTogetherInvite: Boolean = true) {
@@ -343,7 +386,9 @@ import com.zionhuang.innertube.models.YouTubeLocale
         }
 
         override fun onDestroy() {
-            sharedPrefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+            startupDrawGate?.let { window.decorView.viewTreeObserver.removeOnPreDrawListener(it) }
+            startupDrawGate = null
+            if (::sharedPrefs.isInitialized) sharedPrefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
             super.onDestroy()
         }
     }
